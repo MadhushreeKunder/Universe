@@ -14,6 +14,7 @@ npm run dev     # open http://localhost:5173 in Chrome
 | Gesture | Does |
 |---|---|
 | Pinch & move | Grab and drag the sky (let go to drift) |
+| Spread thumb & index (other fingers tucked in) | Wider to zoom in, closer to zoom out |
 | Pinch with both hands | Pull apart to zoom in, push together to zoom out |
 | Point & hold on a marker or place name | Fly there |
 | Hold your fingertip still over the sky | "What is this?" (looks it up in SIMBAD) |

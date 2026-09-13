@@ -11,9 +11,14 @@ const FINGERS = [[8, 5], [12, 9], [16, 13], [20, 17]]; // [tip, knuckle]
 const PINCH_ON = 0.32;
 const PINCH_OFF = 0.48;
 
+// Frames a pose must hold before it switches, so a passing hand shape doesn't trigger it.
+const ZOOM_POSE_FRAMES = 3;
+
 // Starts the webcam and calls onHands(hands) every video frame.
-// Each hand: { key, cursor:{x,y}, pinchPoint:{x,y}, pinching, fist }, coordinates
-// in 0..1 screen space, mirrored so moving your hand right moves right on screen.
+// Each hand: { key, cursor:{x,y}, pinchPoint:{x,y}, pinching, fist, zoomPose, spread },
+// coordinates in 0..1 screen space, mirrored so moving your hand right moves right on screen.
+// `zoomPose` is thumb and index out with the other three fingers curled; `spread` is the
+// thumb–index gap relative to hand size, which the app turns into zoom.
 export async function startHands(video, onHands) {
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
@@ -64,12 +69,15 @@ export async function startHands(video, onHands) {
   return () => stream.getTracks().forEach((t) => t.stop());
 }
 
-class HandTracker {
+export class HandTracker {
   constructor(key) {
     this.key = key;
     this.pinching = false;
+    this.zoomPose = false;
+    this.poseStreak = 0;
     this.cursorFilter = new PointFilter();
     this.pinchFilter = new PointFilter();
+    this.spreadFilter = new OneEuro(0.8, 0.01);
   }
 
   update(lm, aspect, now) {
@@ -86,6 +94,20 @@ class HandTracker {
     const allCurled = FINGERS.every(([tip, knuckle]) => dist(p(tip), wrist) < dist(p(knuckle), wrist) * 1.0);
     const fist = allCurled && pinchRatio > PINCH_ON;
 
+    // Zoom pose: index stretched out, middle/ring/little tucked in, thumb and index apart.
+    const [index, ...others] = FINGERS;
+    const indexOut = dist(p(index[0]), wrist) > dist(p(index[1]), wrist) * 1.35;
+    const othersCurled = others.every(([tip, knuckle]) => dist(p(tip), wrist) < dist(p(knuckle), wrist) * 1.1);
+    const wantsZoom = indexOut && othersCurled && !this.pinching && !fist;
+    if (wantsZoom !== this.zoomPose) {
+      if (++this.poseStreak >= ZOOM_POSE_FRAMES) { this.zoomPose = wantsZoom; this.poseStreak = 0; }
+    } else {
+      this.poseStreak = 0;
+    }
+    // Only smooth while zooming: carrying smoothed history in from a pinch would make the
+    // value keep drifting up after the pose starts, zooming in on its own.
+    const spread = this.zoomPose ? this.spreadFilter.filter(pinchRatio, now) : this.spreadFilter.reset(pinchRatio, now);
+
     const mirror = (pt) => ({ x: 1 - pt.x, y: pt.y });
     const indexTip = mirror(lm[INDEX_TIP]);
     const pinchMid = mirror({ x: (lm[THUMB_TIP].x + lm[INDEX_TIP].x) / 2, y: (lm[THUMB_TIP].y + lm[INDEX_TIP].y) / 2 });
@@ -96,6 +118,8 @@ class HandTracker {
       pinchPoint: this.pinchFilter.filter(pinchMid, now),
       pinching: this.pinching && !fist,
       fist,
+      zoomPose: this.zoomPose && !this.pinching && !fist,
+      spread,
       knuckle: mirror(lm[INDEX_MCP]),
     };
   }
@@ -110,6 +134,10 @@ class OneEuro {
   constructor(minCutoff = 1.2, beta = 0.02, dCutoff = 1.0) {
     this.minCutoff = minCutoff; this.beta = beta; this.dCutoff = dCutoff;
     this.x = null; this.dx = 0; this.t = null;
+  }
+  reset(value, tMs) {
+    this.x = value; this.dx = 0; this.t = tMs;
+    return value;
   }
   filter(value, tMs) {
     if (this.t === null) { this.t = tMs; this.x = value; return value; }

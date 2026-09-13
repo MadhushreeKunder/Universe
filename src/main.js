@@ -9,6 +9,8 @@ const DWELL_MS = 1100;      // point & hold this long to "click"
 const FIST_MS = 900;        // hold a fist this long to go home
 const DRAG_GAIN = 1.6;      // hand movement → sky movement
 const INERTIA_DECAY = 0.9;
+const SPREAD_ZOOM_GAIN = 2.5;   // fingers 3× wider → view ~15× closer
+const SPREAD_DEADZONE = 0.006;  // log-change in spread below this is tremor
 const LOOKUP_STILL_MS = 650;
 
 const sky = await createSky($('sky'));
@@ -73,6 +75,7 @@ function activate(id) {
 let currentTarget = null;
 
 function updateView() {
+  sky.syncHubble();
   const fov = sky.fov;
   const { w, h } = sky.size;
   const c = sky.center;
@@ -184,7 +187,7 @@ function escapeHtml(s) {
   window.addEventListener('pointerup', () => { down = false; });
   skyEl.addEventListener('wheel', () => { sky.cancelFlight(); hideWhatsHere(); }, { passive: true });
   skyEl.addEventListener('pointermove', (e) => {
-    if (e.pointerType !== 'mouse') return;
+    if (e.pointerType !== 'mouse' || hand.latest.length) return;
     if (lookupAnchor && Math.hypot(e.clientX - lookupAnchor.x, e.clientY - lookupAnchor.y) > 30) hideWhatsHere();
     clearTimeout(timer);
     if (down) return;
@@ -207,6 +210,7 @@ const hand = {
   prevPinch: new Map(),   // key → last pinch point (px) while pinching
   prevSpread: null,       // two-hand pinch distance
   prevMid: null,
+  prevZoom: new Map(),    // key → last thumb–index spread while in the zoom pose
   velocity: { x: 0, y: 0 },
   dwell: new Map(),       // key → { id, since }
   still: new Map(),       // key → { x, y, since, asked }
@@ -287,6 +291,29 @@ function applyHands(now) {
     }
   }
 
+  // --- One hand, thumb & index spread: open wider to zoom in, close to zoom out.
+  // Anchored between the two fingertips so what's between them grows. The baseline
+  // resets whenever the pose starts, so entering the pose never causes a jump.
+  for (const hd of hands) {
+    const prev = hand.prevZoom.get(hd.key);
+    if (!hd.zoomPose || pinching.length >= 2) {
+      hand.prevZoom.delete(hd.key);
+      continue;
+    }
+    if (prev === undefined) {
+      hand.prevZoom.set(hd.key, hd.spread);
+      continue;
+    }
+    const change = Math.log(hd.spread / prev);
+    if (Math.abs(change) < SPREAD_DEADZONE) continue; // ignore finger tremor
+    const anchor = px(hd.pinchPoint);
+    sky.cancelFlight();
+    sky.zoomAt(Math.exp(-change * SPREAD_ZOOM_GAIN), anchor.x, anchor.y);
+    hand.prevZoom.set(hd.key, hd.spread);
+    hand.velocity = { x: 0, y: 0 };
+    hideWhatsHere();
+  }
+
   // --- Fist: hold to go home
   const fist = hands.find((hd) => hd.fist);
   if (fist) {
@@ -302,15 +329,16 @@ function applyHands(now) {
   // --- Per-hand cursor, dwell-to-select, hold-still-to-ask
   for (const hd of hands) {
     const el = ensureCursor(hd.key);
-    const c = px(hd.pinching ? hd.pinchPoint : hd.cursor);
+    const c = px(hd.pinching || hd.zoomPose ? hd.pinchPoint : hd.cursor);
     el.style.transform = `translate(${c.x}px, ${c.y}px)`;
     el.classList.toggle('is-pinching', hd.pinching);
+    el.classList.toggle('is-zooming', hd.zoomPose);
     el.classList.toggle('is-fist', hd.fist);
 
     let progress = 0;
     if (hd.fist && Number.isFinite(hand.fistSince)) {
       progress = (now - hand.fistSince) / FIST_MS;
-    } else if (!hd.pinching && !hd.fist) {
+    } else if (!hd.pinching && !hd.fist && !hd.zoomPose) {
       // Dwell on anything selectable under the fingertip
       const under = document.elementsFromPoint(c.x, c.y).find((n) => n.dataset?.dwell && n.style.opacity !== '0');
       const d = hand.dwell.get(hd.key);
@@ -361,6 +389,8 @@ async function enableHands() {
 function frame(now) {
   applyHands(now);
   if (handsOn) $('camera-status').textContent = hand.latest.length ? describeHands(hand.latest) : 'Raise a hand';
+  // While a hand is in view the glowing hand cursor is the pointer; hide the mouse's.
+  document.body.classList.toggle('hands-active', hand.latest.length > 0);
   updateView();
   requestAnimationFrame(frame);
 }
@@ -371,7 +401,8 @@ function describeHands(hands) {
   const n = hands.filter((hd) => hd.pinching).length;
   if (n >= 2) return 'Stretching space';
   if (n === 1) return 'Holding the sky';
-  return hands.length === 2 ? 'Two hands — pinch both to zoom' : 'Pinch to grab the sky';
+  if (hands.some((hd) => hd.zoomPose)) return 'Spread to zoom in, close to zoom out';
+  return 'Pinch to grab · spread thumb & index to zoom';
 }
 
 function closeIntro() {
