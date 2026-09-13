@@ -11,6 +11,11 @@ export const MIN_FOV = 0.002; // ~7 arcsec, deep into Hubble pixels
 export const MAX_FOV = 180;
 export const HOME = { ra: 266.4, dec: -28.9, fov: 140 }; // towards the galactic centre
 
+// Hubble layer fades in between these fields of view (degrees).
+// The widest targets (Orion, Carina, Tarantula) frame at 0.35–0.4°, so they arrive fully shown.
+const HUBBLE_HIDDEN_FOV = 1.2;
+const HUBBLE_FULL_FOV = 0.45;
+
 export async function createSky(el) {
   await A.init;
 
@@ -38,16 +43,28 @@ export async function createSky(el) {
   const hubble = aladin.newImageSurvey(HUBBLE);
   aladin.setOverlayImageLayer(hubble, 'hubble');
 
-  const sky = new Sky(aladin, el);
+  const sky = new Sky(aladin, el, hubble);
   sky.gotoView(HOME);
   return sky;
 }
 
 class Sky {
-  constructor(aladin, el) {
+  constructor(aladin, el, hubble) {
     this.aladin = aladin;
     this.el = el;
+    this.hubble = hubble;
+    this.hubbleOpacity = null;
     this.flight = null;
+  }
+
+  // Zoomed out, each Hubble tile averages a small photo with a lot of empty sky and
+  // renders as a dark block over the survey. Keep the layer hidden until the photos
+  // are big enough on screen to look like photos, then fade them in.
+  syncHubble() {
+    const opacity = 1 - smoothstep(Math.log(HUBBLE_FULL_FOV), Math.log(HUBBLE_HIDDEN_FOV), Math.log(this.fov));
+    if (this.hubbleOpacity !== null && Math.abs(opacity - this.hubbleOpacity) < 0.01) return;
+    this.hubbleOpacity = opacity;
+    this.hubble.setOpacity(opacity);
   }
 
   get fov() {

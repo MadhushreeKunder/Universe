@@ -232,6 +232,9 @@ html, body {
 .legend b { color: var(--ink); font-weight: 500; display: block; }
 
 /* ---------- hand cursors ---------- */
+/* !important beats the inline cursor styles Aladin sets on its canvas. */
+body.hands-active, body.hands-active * { cursor: none !important; }
+
 .hand-cursor {
   position: absolute;
   left: 0;
@@ -261,6 +264,8 @@ html, body {
 .hand-cursor.is-pinching .core { transform: scale(1.5); background: #fff6e6; box-shadow: 0 0 18px 8px rgba(255, 207, 138, 0.9); }
 .hand-cursor.is-pinching .track { stroke: rgba(255, 207, 138, 0.5); }
 .hand-cursor.is-fist .progress { stroke: var(--warm); }
+.hand-cursor.is-zooming .track { stroke: var(--glow); stroke-width: 3; stroke-dasharray: 3 5; }
+.hand-cursor.is-zooming .core { transform: scale(0.7); }
 
 /* ---------- intro ---------- */
 .intro {
